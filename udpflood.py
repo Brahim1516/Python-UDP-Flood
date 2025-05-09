@@ -16,8 +16,8 @@ import signal
 from os import system, name  
 
 # Constants for high-performance flooding  
-PACKET_SIZE = 30000  # Optimal size for high throughput  
-THREADS = 1600       # Increased thread count  
+PACKET_SIZE = 1400  # Optimal size for high throughput  
+THREADS = 500       # Increased thread count  
 BATCH_SIZE = 100    # Packets to send per socket operation  
 
 class UDPFlooder:  
